@@ -125,10 +125,10 @@ function drawDots(
 
   // Opacity ramps up as dots get more spaced out, fades when very spread
   const alpha = screenSpacing < 20
-    ? 0.15 * ((screenSpacing - 8) / 12)
+    ? 0.6 * ((screenSpacing - 8) / 12)
     : screenSpacing < 100
-      ? 0.15
-      : 0.15 * Math.max(0, 1 - (screenSpacing - 100) / 200);
+      ? 0.6
+      : 0.6 * Math.max(0, 1 - (screenSpacing - 100) / 200);
 
   if (alpha < 0.005) return;
 
