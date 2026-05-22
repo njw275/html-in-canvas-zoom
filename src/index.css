@@ -1,0 +1,27 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #0a0a0f;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.viewport {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.viewport:active {
+  cursor: grabbing;
+}
