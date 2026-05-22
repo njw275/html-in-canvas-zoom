@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Camera } from '../utils/math';
 
 interface CanvasLayerProps {
@@ -6,132 +6,46 @@ interface CanvasLayerProps {
   subscribe: (cb: () => void) => () => void;
 }
 
-/**
- * Background canvas layer: renders a fractal dot grid that scales
- * smoothly with zoom. Dots appear and disappear as you zoom in/out,
- * giving the feeling of infinite space.
- */
 export function CanvasLayer({ cameraRef, subscribe }: CanvasLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
-  const dirtyRef = useRef(true);
 
-  const draw = useCallback(() => {
+  useEffect(() => {
     const canvas = canvasRef.current;
-    const cam = cameraRef.current;
-    if (!canvas || !cam) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    let needsDraw = true;
 
-    // Resize canvas if needed
-    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-      ctx.scale(dpr, dpr);
-    }
+    const unsub = subscribe(() => {
+      needsDraw = true;
+    });
 
-    ctx.clearRect(0, 0, w, h);
-
-    // ── Fractal dot grid ──────────────────────────────────────────
-    // Find a grid spacing where dots are 20-80px apart on screen
-    const BASE_SPACING = 50;
-    const idealScreenSpacing = 50;
-
-    // Calculate grid level: we want spacing * zoom ≈ idealScreenSpacing
-    // So spacing = idealScreenSpacing / zoom
-    // We snap to powers of a nice base (5) to get a "fractal" feel
-    const rawSpacing = idealScreenSpacing / cam.zoom;
-    const logBase = Math.log10(rawSpacing / BASE_SPACING);
-    const level = Math.floor(logBase);
-    const spacing = BASE_SPACING * Math.pow(10, level);
-    const screenSpacing = spacing * cam.zoom;
-
-    // Fade: dots at current level are full opacity when screenSpacing is
-    // in the sweet spot, fade out when too large (subdivision appearing)
-    const t = (screenSpacing - 20) / (80 - 20); // 0..1 within range
-    const alpha = 0.12 * Math.min(1, Math.max(0.3, 1 - Math.abs(t - 0.5)));
-
-    // Also draw a finer sublevel for smooth transitions
-    const subSpacing = spacing / 10;
-    const subScreenSpacing = subSpacing * cam.zoom;
-    const subAlpha = subScreenSpacing > 10 ? 0.05 * Math.min(1, (subScreenSpacing - 10) / 30) : 0;
-
-    // Calculate visible world bounds
-    const worldLeft = cam.x - w / (2 * cam.zoom);
-    const worldTop = cam.y - h / (2 * cam.zoom);
-    const worldRight = cam.x + w / (2 * cam.zoom);
-    const worldBottom = cam.y + h / (2 * cam.zoom);
-
-    // Draw dots for each grid level
-    const drawDots = (sp: number, a: number) => {
-      if (a < 0.01 || sp * cam.zoom < 5) return;
-
-      ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
-
-      const startX = Math.floor(worldLeft / sp) * sp;
-      const startY = Math.floor(worldTop / sp) * sp;
-
-      // Limit iterations to prevent performance issues
-      const maxDots = 10000;
-      let count = 0;
-
-      for (let wx = startX; wx <= worldRight && count < maxDots; wx += sp) {
-        for (let wy = startY; wy <= worldBottom && count < maxDots; wy += sp) {
-          // World to screen
-          const sx = (wx - cam.x) * cam.zoom + w / 2;
-          const sy = (wy - cam.y) * cam.zoom + h / 2;
-
-          ctx.beginPath();
-          ctx.arc(sx, sy, 1.2, 0, Math.PI * 2);
-          ctx.fill();
-          count++;
-        }
-      }
+    const onResize = () => {
+      needsDraw = true;
     };
-
-    drawDots(spacing, alpha);
-    if (subAlpha > 0.01) {
-      drawDots(subSpacing, subAlpha);
-    }
-  }, [cameraRef]);
-
-  // Animation loop — only redraws when dirty
-  useEffect(() => {
-    // Ensure we draw on (re)mount (StrictMode runs effects twice)
-    dirtyRef.current = true;
+    window.addEventListener('resize', onResize);
 
     const loop = () => {
-      if (dirtyRef.current) {
-        draw();
-        dirtyRef.current = false;
+      if (needsDraw) {
+        drawGrid(canvas, ctx, cameraRef.current!);
+        needsDraw = false;
       }
       rafRef.current = requestAnimationFrame(loop);
     };
 
+    // Always draw at least once
+    needsDraw = true;
     rafRef.current = requestAnimationFrame(loop);
-
-    // Subscribe to camera changes
-    const unsub = subscribe(() => {
-      dirtyRef.current = true;
-    });
-
-    // Also handle resize
-    const onResize = () => { dirtyRef.current = true; };
-    window.addEventListener('resize', onResize);
 
     return () => {
       cancelAnimationFrame(rafRef.current);
       unsub();
       window.removeEventListener('resize', onResize);
     };
-  }, [draw, subscribe]);
+  }, [cameraRef, subscribe]);
 
   return (
     <canvas
@@ -140,9 +54,103 @@ export function CanvasLayer({ cameraRef, subscribe }: CanvasLayerProps) {
         position: 'absolute',
         top: 0,
         left: 0,
+        width: '100%',
+        height: '100%',
         zIndex: 0,
         pointerEvents: 'none',
       }}
     />
   );
+}
+
+function drawGrid(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, cam: Camera) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  // Resize canvas buffer to match screen
+  const bw = Math.round(w * dpr);
+  const bh = Math.round(h * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+
+  // Reset transform and clear
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  // ── Fractal dot grid ──────────────────────────────────────────
+  // Find grid spacing where dots are ~30-80px apart on screen
+  const BASE = 50;
+
+  // What world-space spacing gives us ~50px screen spacing?
+  // screenSpacing = worldSpacing * zoom → worldSpacing = 50 / zoom
+  // Snap to powers of 10 relative to BASE
+  const raw = BASE / cam.zoom; // if zoom < 1, raw > BASE
+  const logLevel = Math.log10(raw / BASE); // 0 when raw == BASE
+  const level = Math.floor(logLevel);
+  const spacing = BASE * Math.pow(10, level);
+  const screenSpacing = spacing * cam.zoom;
+
+  // Visible world bounds
+  const worldLeft = cam.x - w / (2 * cam.zoom);
+  const worldTop = cam.y - h / (2 * cam.zoom);
+  const worldRight = cam.x + w / (2 * cam.zoom);
+  const worldBottom = cam.y + h / (2 * cam.zoom);
+
+  // Draw two grid levels for smooth transitions
+  drawDots(ctx, cam, spacing, screenSpacing, worldLeft, worldTop, worldRight, worldBottom, w, h);
+
+  const fineSpacing = spacing / 5;
+  const fineScreenSpacing = fineSpacing * cam.zoom;
+  if (fineScreenSpacing > 12) {
+    drawDots(ctx, cam, fineSpacing, fineScreenSpacing, worldLeft, worldTop, worldRight, worldBottom, w, h);
+  }
+}
+
+function drawDots(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  spacing: number,
+  screenSpacing: number,
+  worldLeft: number,
+  worldTop: number,
+  worldRight: number,
+  worldBottom: number,
+  w: number,
+  h: number,
+) {
+  if (screenSpacing < 8) return;
+
+  // Opacity ramps up as dots get more spaced out, fades when very spread
+  const alpha = screenSpacing < 20
+    ? 0.15 * ((screenSpacing - 8) / 12)
+    : screenSpacing < 100
+      ? 0.15
+      : 0.15 * Math.max(0, 1 - (screenSpacing - 100) / 200);
+
+  if (alpha < 0.005) return;
+
+  ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+
+  const startX = Math.floor(worldLeft / spacing) * spacing;
+  const startY = Math.floor(worldTop / spacing) * spacing;
+  const endX = worldRight;
+  const endY = worldBottom;
+
+  let count = 0;
+  const MAX = 15000;
+
+  for (let wx = startX; wx <= endX && count < MAX; wx += spacing) {
+    for (let wy = startY; wy <= endY && count < MAX; wy += spacing) {
+      const sx = (wx - cam.x) * cam.zoom + w / 2;
+      const sy = (wy - cam.y) * cam.zoom + h / 2;
+
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+      count++;
+    }
+  }
 }
