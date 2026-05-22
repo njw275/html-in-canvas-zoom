@@ -104,6 +104,9 @@ export function CanvasLayer({ cameraRef, subscribe }: CanvasLayerProps) {
 
   // Animation loop — only redraws when dirty
   useEffect(() => {
+    // Ensure we draw on (re)mount (StrictMode runs effects twice)
+    dirtyRef.current = true;
+
     const loop = () => {
       if (dirtyRef.current) {
         draw();
