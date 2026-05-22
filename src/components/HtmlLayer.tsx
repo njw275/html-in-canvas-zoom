@@ -62,9 +62,11 @@ export function HtmlLayer({ cameraRef, subscribe, rootNode }: HtmlLayerProps) {
     >
       <div
         style={{
-          transformOrigin: '0 0',
-          transform: `translate(${vw / 2}px, ${vh / 2}px) scale(${camera.zoom}) translate(${-camera.x}px, ${-camera.y}px)`,
-          willChange: 'transform',
+          position: 'absolute',
+          left: vw / 2 - camera.x * camera.zoom,
+          top: vh / 2 - camera.y * camera.zoom,
+          zoom: camera.zoom,
+          willChange: 'zoom, left, top',
           pointerEvents: 'auto',
         }}
       >
