@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react';
-import { Camera, Point, screenToWorld, clamp } from '../utils/math';
+import type { Camera, Point } from '../utils/math';
+import { screenToWorld, clamp } from '../utils/math';
 
 const MIN_ZOOM = 0.0001;
 const MAX_ZOOM = 100000;
