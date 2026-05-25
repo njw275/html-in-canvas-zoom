@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Camera } from '../utils/math';
+import type { ZoomLevel } from '../levels';
+import { splitAtPortal } from '../levels';
 
 interface DebugValues {
   nestScale: number;
@@ -12,22 +14,20 @@ interface Props {
   subscribe: (cb: () => void) => () => void;
   values: DebugValues;
   onValuesChange: (v: DebugValues) => void;
-  /** Imperatively set camera position + zoom */
   setCameraTo: (x: number, y: number, zoom: number) => void;
+  levels: ZoomLevel[];
+  nestScale: number;
 }
 
-export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCameraTo }: Props) {
+export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCameraTo, levels, nestScale }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [cam, setCam] = useState<Camera>({ x: 0, y: 0, zoom: 1 });
-  const rafRef = useRef(0);
 
-  // Subscribe to camera changes for live readout
   useEffect(() => {
     const unsub = subscribe(() => {
       const c = cameraRef.current!;
       setCam({ x: c.x, y: c.y, zoom: c.zoom });
     });
-    // Initial read
     const c = cameraRef.current!;
     setCam({ x: c.x, y: c.y, zoom: c.zoom });
     return unsub;
@@ -54,14 +54,18 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
     }
   };
 
-  const resetCamera = () => {
-    setCameraTo(0, 0, 1);
-  };
+  const resetCamera = () => setCameraTo(0, 0, 1);
 
-  // Stop pointer events from reaching the canvas (no pan while clicking debug pane)
   const stopProp = (e: React.PointerEvent | React.MouseEvent | React.WheelEvent) => {
     e.stopPropagation();
   };
+
+  // Compute the zoom needed to read each level
+  const levelZooms = levels.map((_, i) => Math.pow(1 / nestScale, i));
+
+  // Determine which level is "active" (closest readable at current zoom)
+  const activeLevel = levelZooms.reduce((best, z, i) =>
+    cam.zoom >= z * 0.3 ? i : best, 0);
 
   if (collapsed) {
     return (
@@ -77,18 +81,13 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
   }
 
   return (
-    <div
-      style={panelStyle}
-      onPointerDown={stopProp}
-      onMouseDown={stopProp}
-      onWheel={stopProp}
-    >
+    <div style={panelStyle} onPointerDown={stopProp} onMouseDown={stopProp} onWheel={stopProp}>
       <div style={headerStyle}>
         <span style={{ fontWeight: 700, fontSize: 13 }}>🔧 Debug</span>
         <button onClick={() => setCollapsed(true)} style={closeBtnStyle}>✕</button>
       </div>
 
-      {/* Camera readout */}
+      {/* Camera */}
       <Section title="Camera">
         <Row label="X">
           <NumberInput value={cam.x} onChange={handleXInput} step={10} />
@@ -97,13 +96,13 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
           <NumberInput value={cam.y} onChange={handleYInput} step={10} />
         </Row>
         <Row label="Zoom">
-          <NumberInput value={cam.zoom} onChange={handleZoomInput} step={0.1} min={0.0001} />
+          <NumberInput value={cam.zoom} onChange={handleZoomInput} step={0.1} />
         </Row>
         <Row label="Zoom (log₁₀)">
           <input
             type="range"
-            min={-4}
-            max={5}
+            min={Math.log10(values.minZoom)}
+            max={Math.log10(values.maxZoom)}
             step={0.01}
             value={Math.log10(cam.zoom)}
             onChange={(e) => handleZoomInput(String(Math.pow(10, parseFloat(e.target.value))))}
@@ -114,13 +113,56 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
         <button onClick={resetCamera} style={smallBtnStyle}>Reset to origin</button>
       </Section>
 
-      {/* Nest scale */}
+      {/* Levels - jump to each one */}
+      <Section title={`Levels (${levels.length})`}>
+        {levels.map((level, i) => {
+          const z = levelZooms[i];
+          const split = splitAtPortal(level);
+          const isActive = i === activeLevel;
+          return (
+            <div
+              key={i}
+              onClick={() => setCameraTo(cameraRef.current!.x, cameraRef.current!.y, z)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '3px 6px',
+                marginBottom: 2,
+                borderRadius: 4,
+                cursor: 'pointer',
+                background: isActive ? 'rgba(124,124,255,0.2)' : 'transparent',
+                border: isActive ? '1px solid rgba(124,124,255,0.4)' : '1px solid transparent',
+              }}
+            >
+              <span style={{ fontSize: 10, color: '#888', width: 16, flexShrink: 0 }}>L{i}</span>
+              <span style={{ fontSize: 11, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {split ? (
+                  <>
+                    {split.before}
+                    <span style={{ color: '#ff8', fontWeight: 700 }}>{split.portal}</span>
+                    {split.after}
+                  </>
+                ) : level.text}
+              </span>
+              <span style={{ fontSize: 9, color: '#8f8', flexShrink: 0 }}>
+                {z >= 1000 ? z.toExponential(0) : z}x
+              </span>
+            </div>
+          );
+        })}
+        <div style={{ fontSize: 10, color: '#666', marginTop: 4 }}>
+          Click a level to jump to its zoom
+        </div>
+      </Section>
+
+      {/* Nest Scale */}
       <Section title="Nest Scale">
         <Row label="Scale">
           <input
             type="range"
-            min={-3}
-            max={0}
+            min={-4}
+            max={-1}
             step={0.01}
             value={Math.log10(values.nestScale)}
             onChange={(e) =>
@@ -128,14 +170,14 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
             }
             style={sliderStyle}
           />
-          <span style={valStyle}>1/{(1 / values.nestScale).toFixed(1)}</span>
+          <span style={valStyle}>1/{(1 / values.nestScale).toFixed(0)}</span>
         </Row>
         <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
-          Readable at ~{(1 / values.nestScale).toFixed(0)}x zoom
+          Each level readable at {(1 / values.nestScale).toFixed(0)}x of parent
         </div>
       </Section>
 
-      {/* Zoom limits */}
+      {/* Zoom Limits */}
       <Section title="Zoom Limits">
         <Row label="Min">
           <input
@@ -152,37 +194,10 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
           <span style={valStyle}>{values.minZoom.toExponential(1)}</span>
         </Row>
         <Row label="Max">
-          <input
-            type="range"
-            min={2}
-            max={8}
-            step={0.1}
-            value={Math.log10(values.maxZoom)}
-            onChange={(e) =>
-              onValuesChange({ ...values, maxZoom: Math.pow(10, parseFloat(e.target.value)) })
-            }
-            style={sliderStyle}
-          />
-          <span style={valStyle}>{values.maxZoom.toExponential(1)}</span>
+          <span style={{ fontSize: 10, color: '#888' }}>
+            Auto: {values.maxZoom.toExponential(1)} (from {levels.length} levels)
+          </span>
         </Row>
-      </Section>
-
-      {/* Quick zoom presets */}
-      <Section title="Quick Zoom">
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {[0.01, 0.1, 1, 5, 10, 30, 100, 1000].map((z) => (
-            <button
-              key={z}
-              onClick={() => setCameraTo(cam.x, cam.y, z)}
-              style={{
-                ...smallBtnStyle,
-                background: Math.abs(cam.zoom - z) < z * 0.05 ? '#555' : '#333',
-              }}
-            >
-              {z}x
-            </button>
-          ))}
-        </div>
       </Section>
     </div>
   );
@@ -214,12 +229,10 @@ function NumberInput({
   value,
   onChange,
   step = 1,
-  min,
 }: {
   value: number;
   onChange: (v: string) => void;
   step?: number;
-  min?: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
@@ -234,15 +247,9 @@ function NumberInput({
       type="text"
       value={text}
       onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
-        onChange(text);
-        setEditing(false);
-      }}
+      onBlur={() => { onChange(text); setEditing(false); }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          onChange(text);
-          setEditing(false);
-        }
+        if (e.key === 'Enter') { onChange(text); setEditing(false); }
         if (e.key === 'Escape') setEditing(false);
         e.stopPropagation();
       }}
@@ -250,10 +257,7 @@ function NumberInput({
     />
   ) : (
     <span
-      onClick={() => {
-        setText(display);
-        setEditing(true);
-      }}
+      onClick={() => { setText(display); setEditing(true); }}
       style={{ ...valStyle, cursor: 'text', borderBottom: '1px dashed #666' }}
       title="Click to edit"
     >
@@ -268,7 +272,7 @@ const panelStyle: React.CSSProperties = {
   position: 'fixed',
   top: 12,
   right: 12,
-  width: 260,
+  width: 270,
   background: 'rgba(20, 20, 30, 0.92)',
   backdropFilter: 'blur(12px)',
   border: '1px solid rgba(255,255,255,0.12)',

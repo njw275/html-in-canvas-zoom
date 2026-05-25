@@ -1,41 +1,55 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import type { Camera } from '../utils/math';
+import type { ZoomLevel } from '../levels';
+import { splitAtPortal } from '../levels';
 
 interface Props {
   cameraRef: React.RefObject<Camera>;
   subscribe: (cb: () => void) => () => void;
   nestScale: number;
+  levels: ZoomLevel[];
 }
 
-// ── World-space layout constants ───────────────────────────────────
-const H1_WIDTH = 900;
-const H1_HEIGHT = 200;
-const H2_WIDTH = 700;
-const H2_HEIGHT = 120;
+// Each level's DOM container is this size in world-space
+const LEVEL_WIDTH = 900;
+const LEVEL_HEIGHT = 200;
 
-export function InfiniteCanvas({ cameraRef, subscribe, nestScale }: Props) {
+export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const h1Ref = useRef<HTMLDivElement>(null);
-  const h2Ref = useRef<HTMLDivElement>(null);
-  const portalRef = useRef<HTMLSpanElement>(null);
 
-  // O center offset from h1 container center (measured at runtime)
-  const [oOffset, setOOffset] = useState({ x: 40, y: 0 });
+  // Refs to each level's container div and portal span
+  const levelRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const portalRefs = useRef<(HTMLSpanElement | null)[]>([]);
 
-  // Measure the portal "O" position after first render
-  useEffect(() => {
-    const span = portalRef.current;
-    const container = h1Ref.current;
-    if (!span || !container) return;
+  // Portal offsets: measured center of portal char relative to its container center
+  const portalOffsets = useRef<{ x: number; y: number }[]>([]);
 
-    const cRect = container.getBoundingClientRect();
-    const sRect = span.getBoundingClientRect();
+  // Measure portal positions after mount
+  const measurePortals = useCallback(() => {
+    portalOffsets.current = levels.map((_, i) => {
+      const container = levelRefs.current[i];
+      const portal = portalRefs.current[i];
+      if (!container || !portal) return { x: 0, y: 0 };
 
-    setOOffset({
-      x: (sRect.left + sRect.width / 2) - (cRect.left + cRect.width / 2),
-      y: (sRect.top + sRect.height / 2) - (cRect.top + cRect.height / 2),
+      const cRect = container.getBoundingClientRect();
+      const pRect = portal.getBoundingClientRect();
+      return {
+        x: (pRect.left + pRect.width / 2) - (cRect.left + cRect.width / 2),
+        y: (pRect.top + pRect.height / 2) - (cRect.top + cRect.height / 2),
+      };
     });
-  }, []);
+  }, [levels]);
+
+  // Measure once after first paint
+  useEffect(() => {
+    // Wait a frame for layout
+    const id = requestAnimationFrame(() => {
+      measurePortals();
+      // Trigger a redraw
+      canvasRef.current?.dispatchEvent(new Event('paint'));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [measurePortals]);
 
   // Main draw loop
   useEffect(() => {
@@ -47,23 +61,16 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale }: Props) {
     let rafId = 0;
     let needsDraw = true;
 
-    const unsub = subscribe(() => {
-      needsDraw = true;
-    });
+    const unsub = subscribe(() => { needsDraw = true; });
+    const onResize = () => { needsDraw = true; };
+    const onPaint = () => { needsDraw = true; };
 
-    const onResize = () => {
-      needsDraw = true;
-    };
     window.addEventListener('resize', onResize);
-
-    const onPaint = () => {
-      needsDraw = true;
-    };
     canvas.addEventListener('paint', onPaint);
 
     const loop = () => {
       if (needsDraw) {
-        draw(canvas, ctx, cameraRef.current!, h1Ref.current, h2Ref.current, oOffset, nestScale);
+        drawAll(canvas, ctx, cameraRef.current!, levels, levelRefs.current, portalOffsets.current, nestScale);
         needsDraw = false;
       }
       rafId = requestAnimationFrame(loop);
@@ -76,7 +83,11 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale }: Props) {
       window.removeEventListener('resize', onResize);
       canvas.removeEventListener('paint', onPaint);
     };
-  }, [cameraRef, subscribe, oOffset, nestScale]);
+  }, [cameraRef, subscribe, nestScale, levels]);
+
+  // Determine font size per level — first level is big (h1), rest are slightly smaller
+  const fontSize = (i: number) => i === 0 ? 120 : 80;
+  const fontWeight = (i: number) => i === 0 ? 800 : 600;
 
   return (
     <canvas
@@ -91,48 +102,61 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale }: Props) {
         height: '100%',
       }}
     >
-      {/* Layer 0: the h1 "Welcome" */}
-      <div
-        ref={h1Ref}
-        style={{
-          width: H1_WIDTH,
-          height: H1_HEIGHT,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <h1 className="welcome-text">
-          Welc<span ref={portalRef} className="portal-o">o</span>me
-        </h1>
-      </div>
-
-      {/* Layer 1: the h2 "to the zoom grid" — drawn tiny at the O's center */}
-      <div
-        ref={h2Ref}
-        style={{
-          width: H2_WIDTH,
-          height: H2_HEIGHT,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <h2 className="inner-text">to the zoom grid</h2>
-      </div>
+      {levels.map((level, i) => {
+        const split = splitAtPortal(level);
+        return (
+          <div
+            key={i}
+            ref={(el) => { levelRefs.current[i] = el; }}
+            style={{
+              width: LEVEL_WIDTH,
+              height: LEVEL_HEIGHT,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <span
+              style={{
+                margin: 0,
+                fontSize: fontSize(i),
+                fontWeight: fontWeight(i),
+                letterSpacing: '-0.03em',
+                color: '#ffffff',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {split ? (
+                <>
+                  {split.before}
+                  <span
+                    ref={(el) => { portalRefs.current[i] = el; }}
+                    style={{ display: 'inline', color: '#ffffff' }}
+                  >
+                    {split.portal}
+                  </span>
+                  {split.after}
+                </>
+              ) : (
+                level.text
+              )}
+            </span>
+          </div>
+        );
+      })}
     </canvas>
   );
 }
 
 // ── Drawing ────────────────────────────────────────────────────────
 
-function draw(
+function drawAll(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   cam: Camera,
-  h1El: HTMLDivElement | null,
-  h2El: HTMLDivElement | null,
-  oOffset: { x: number; y: number },
+  levels: ZoomLevel[],
+  levelEls: (HTMLDivElement | null)[],
+  portalOffsets: { x: number; y: number }[],
   nestScale: number,
 ) {
   const dpr = window.devicePixelRatio || 1;
@@ -167,30 +191,48 @@ function draw(
     return;
   }
 
-  // ── Draw h1 "Welcome" centered at world origin ────────────────
-  if (h1El) {
-    ctx.save();
-    ctx.translate(-H1_WIDTH / 2, -H1_HEIGHT / 2);
-    try {
-      const transform = drawFn.call(ctx, h1El, 0, 0);
-      if (transform) h1El.style.transform = transform.toString();
-    } catch { /* first frame before paint */ }
-    ctx.restore();
-  }
+  // Draw each level. Level 0 is at the origin; each subsequent level
+  // is translated to the portal of its parent and scaled by nestScale.
+  //
+  // We accumulate the transform: for level i, the CTM has already been
+  // scaled by nestScale^i relative to the camera, so we just need to
+  // translate to the parent's portal offset, scale, then draw.
 
-  // ── Draw h2 "to the zoom grid" inside the O ──────────────────
-  // Positioned at O's center, scaled down by nestScale so it's
-  // a tiny speck at zoom 1x but readable when you zoom to ~30x
-  if (h2El) {
+  for (let i = 0; i < levels.length; i++) {
+    const el = levelEls[i];
+    if (!el) continue;
+
+    // Visibility culling: the effective zoom for this level is cam.zoom * nestScale^(-i)
+    // in terms of how big the text appears on screen. If it's way too small or way too big, skip.
+    const effectiveScale = cam.zoom * Math.pow(nestScale, i);
+    const screenWidth = LEVEL_WIDTH * effectiveScale;
+
+    // Skip if too small to see (< 2px) or too zoomed in (text > 50x viewport)
+    if (screenWidth < 2 || screenWidth > w * 50) {
+      // Still need to apply the transform for the next level
+      if (i < levels.length - 1) {
+        const offset = portalOffsets[i] || { x: 0, y: 0 };
+        ctx.translate(offset.x, offset.y);
+        ctx.scale(nestScale, nestScale);
+      }
+      continue;
+    }
+
+    // Draw this level centered
     ctx.save();
-    ctx.translate(oOffset.x, oOffset.y);
-    ctx.scale(nestScale, nestScale);
-    ctx.translate(-H2_WIDTH / 2, -H2_HEIGHT / 2);
+    ctx.translate(-LEVEL_WIDTH / 2, -LEVEL_HEIGHT / 2);
     try {
-      const transform = drawFn.call(ctx, h2El, 0, 0);
-      if (transform) h2El.style.transform = transform.toString();
+      const transform = drawFn.call(ctx, el, 0, 0);
+      if (transform) el.style.transform = transform.toString();
     } catch { /* first frame before paint */ }
     ctx.restore();
+
+    // Set up transform for the next level: translate to portal, scale down
+    if (i < levels.length - 1) {
+      const offset = portalOffsets[i] || { x: 0, y: 0 };
+      ctx.translate(offset.x, offset.y);
+      ctx.scale(nestScale, nestScale);
+    }
   }
 
   ctx.restore();
