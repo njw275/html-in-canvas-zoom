@@ -1,7 +1,6 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Camera } from '../utils/math';
 import type { ZoomLevel } from '../levels';
-import { splitAtPortal } from '../levels';
 
 interface Props {
   cameraRef: React.RefObject<Camera>;
@@ -20,39 +19,8 @@ function levelHeight(i: number): number {
 export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Refs to each level's container div and portal span
+  // Refs to each level's container div
   const levelRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const portalRefs = useRef<(HTMLSpanElement | null)[]>([]);
-
-  // Portal offsets: measured center of portal char relative to its container center
-  const portalOffsets = useRef<{ x: number; y: number }[]>([]);
-
-  // Measure portal positions after mount
-  const measurePortals = useCallback(() => {
-    portalOffsets.current = levels.map((_, i) => {
-      const container = levelRefs.current[i];
-      const portal = portalRefs.current[i];
-      if (!container || !portal) return { x: 0, y: 0 };
-
-      const cRect = container.getBoundingClientRect();
-      const pRect = portal.getBoundingClientRect();
-      return {
-        x: (pRect.left + pRect.width / 2) - (cRect.left + cRect.width / 2),
-        y: (pRect.top + pRect.height / 2) - (cRect.top + cRect.height / 2),
-      };
-    });
-  }, [levels]);
-
-  // Measure once after first paint
-  useEffect(() => {
-    // Wait a frame for layout
-    const id = requestAnimationFrame(() => {
-      measurePortals();
-      // Trigger a redraw
-      canvasRef.current?.dispatchEvent(new Event('paint'));
-    });
-    return () => cancelAnimationFrame(id);
-  }, [measurePortals]);
 
   // Main draw loop
   useEffect(() => {
@@ -73,7 +41,7 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
 
     const loop = () => {
       if (needsDraw) {
-        drawAll(canvas, ctx, cameraRef.current!, levels, levelRefs.current, portalOffsets.current, nestScale);
+        drawAll(canvas, ctx, cameraRef.current!, levels, levelRefs.current, nestScale);
         needsDraw = false;
       }
       rafId = requestAnimationFrame(loop);
@@ -106,7 +74,6 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
       }}
     >
       {levels.map((level, i) => {
-        const split = splitAtPortal(level);
         const lh = levelHeight(i);
         return (
           <div
@@ -130,20 +97,7 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
                 whiteSpace: 'nowrap',
               }}
             >
-              {split ? (
-                <>
-                  {split.before}
-                  <span
-                    ref={(el) => { portalRefs.current[i] = el; }}
-                    style={{ display: 'inline', color: '#ffffff' }}
-                  >
-                    {split.portal}
-                  </span>
-                  {split.after}
-                </>
-              ) : (
-                level.text
-              )}
+              {level.text}
             </span>
           </div>
         );
@@ -160,7 +114,6 @@ function drawAll(
   cam: Camera,
   levels: ZoomLevel[],
   levelEls: (HTMLDivElement | null)[],
-  portalOffsets: { x: number; y: number }[],
   nestScale: number,
 ) {
   const dpr = window.devicePixelRatio || 1;
@@ -184,47 +137,31 @@ function drawAll(
   const drawFn = (ctx as any).drawElementImage;
   if (!drawFn) return;
 
-  // ── Per-level rendering with fresh CTM ──────────────────────
-  // Instead of accumulating transforms on the canvas CTM (which uses
-  // float32 internally and loses precision at deep zoom levels like
-  // 1e6+), we compute each level's world-space center in double-
-  // precision JS math, then set a fresh CTM per level.  This keeps
-  // the float32 matrix values small and eliminates jitter/shaking.
-
-  // Pre-compute world-space center for each level.
-  // Level 0 is at origin.  Level i = sum of portal offsets scaled
-  // to world space:  worldCenter[i] += portalOffset[i-1] * nestScale^(i-1)
-  const worldCenters: { x: number; y: number }[] = [];
-  let wcx = 0, wcy = 0;
-  for (let i = 0; i < levels.length; i++) {
-    worldCenters.push({ x: wcx, y: wcy });
-    if (i < levels.length - 1) {
-      const offset = portalOffsets[i] || { x: 0, y: 0 };
-      const s = Math.pow(nestScale, i);
-      wcx += offset.x * s;
-      wcy += offset.y * s;
-    }
-  }
+  // ── Relative zoom-depth rendering ─────────────────────────────
+  // Each level is always drawn centered on the camera (wherever you
+  // are looking). The zoom *depth* determines which level is visible,
+  // not your position. This means zooming into any "o" (or any spot)
+  // reveals the next level — it's the magnification that matters.
+  //
+  // Level i is visible when cam.zoom is around (1/nestScale)^i,
+  // i.e. effectiveZoom = cam.zoom * nestScale^i ≈ 1 means that
+  // level's text is at "native" size.
 
   for (let i = 0; i < levels.length; i++) {
     const el = levelEls[i];
     if (!el) continue;
 
-    // Effective zoom for this level's content on screen
+    // How zoomed-in this level's content appears on screen
     const effectiveZoom = cam.zoom * Math.pow(nestScale, i);
     const screenWidth = LEVEL_WIDTH * effectiveZoom;
 
     // Skip if too small to see (< 2px) or too zoomed in (text > 50x viewport)
     if (screenWidth < 2 || screenWidth > w * 50) continue;
 
-    // Screen-space center of this level (double-precision arithmetic)
-    const sx = (worldCenters[i].x - cam.x) * cam.zoom + w / 2;
-    const sy = (worldCenters[i].y - cam.y) * cam.zoom + h / 2;
-
-    // Set a fresh CTM — keeps float32 matrix values viewport-sized
+    // Always draw centered on screen (viewport center)
     ctx.setTransform(
       effectiveZoom * dpr, 0, 0, effectiveZoom * dpr,
-      sx * dpr, sy * dpr,
+      (w / 2) * dpr, (h / 2) * dpr,
     );
 
     // Draw this level centered on its screen position
