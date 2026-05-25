@@ -1,102 +1,61 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Camera } from '../utils/math';
-import type { MindMapNode } from '../types';
-import { getLOD } from '../hooks/useLOD';
-import { flattenTree, getChildOpacity, getPortalCharOpacity } from '../utils/nodeTree';
-import type { FlatNode } from '../utils/nodeTree';
 
-interface InfiniteCanvasProps {
+interface Props {
   cameraRef: React.RefObject<Camera>;
   subscribe: (cb: () => void) => () => void;
-  rootNode: MindMapNode;
 }
 
-/**
- * Single <canvas layoutsubtree> element that:
- * 1. Renders HTML nodes as direct children of the canvas
- * 2. Draws them into the canvas via ctx.drawElementImage()
- * 3. Uses canvas CTM for zoom/pan — browser re-rasterizes at full fidelity
- * 4. Draws the dot grid + bezier connection curves
- * 5. Manages the portal reveal system for continuous zoom
- */
-export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanvasProps) {
+// ── World-space layout constants ───────────────────────────────────
+// h1 container: sized to hold "Welcome" at 120px comfortably
+const H1_WIDTH = 900;
+const H1_HEIGHT = 200;
+
+// h2 container: normal readable size (gets scaled down by NEST_SCALE)
+const H2_WIDTH = 700;
+const H2_HEIGHT = 120;
+
+// How much smaller the h2 is in world space.
+// At zoom 1x:  h2 is ~23px wide — invisible speck inside the O
+// At zoom 10x: h2 is 233px wide — starting to read
+// At zoom 30x: h2 is 700px wide — fully readable, O is off-screen
+const NEST_SCALE = 1 / 30;
+
+export function InfiniteCanvas({ cameraRef, subscribe }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nodeRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
-  const [renderTick, setRenderTick] = useState(0);
-  const dashOffsetRef = useRef(0);
+  const h1Ref = useRef<HTMLDivElement>(null);
+  const h2Ref = useRef<HTMLDivElement>(null);
+  const portalRef = useRef<HTMLSpanElement>(null);
 
-  // Force re-render periodically to update LOD/reveal (camera changes are ref-based)
+  // O center offset from h1 container center (measured at runtime)
+  const [oOffset, setOOffset] = useState({ x: 40, y: 0 });
+
+  // Measure the portal "O" position after first render
   useEffect(() => {
-    const unsub = subscribe(() => {
-      setRenderTick((n) => n + 1);
+    const span = portalRef.current;
+    const container = h1Ref.current;
+    if (!span || !container) return;
+
+    const cRect = container.getBoundingClientRect();
+    const sRect = span.getBoundingClientRect();
+
+    setOOffset({
+      x: (sRect.left + sRect.width / 2) - (cRect.left + cRect.width / 2),
+      y: (sRect.top + sRect.height / 2) - (cRect.top + cRect.height / 2),
     });
-    return unsub;
-  }, [subscribe]);
+  }, []);
 
-  // Flatten the tree based on current camera state
-  const cam = cameraRef.current!;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
-  const flatNodes = useMemo(
-    () => flattenTree(rootNode, cam),
-    // renderTick dependency forces recalc on camera changes
-    [rootNode, renderTick],
-  );
-
-  // Register a node ref
-  const setNodeRef = (id: string) => (el: HTMLDivElement | null) => {
-    if (el) {
-      nodeRefsMap.current.set(id, el);
-    } else {
-      nodeRefsMap.current.delete(id);
-    }
-  };
-
-  // Wrap portal char in the title with a span
-  const renderTitle = (flatNode: FlatNode) => {
-    const { node } = flatNode;
-    const portalOpacity = getPortalCharOpacity(flatNode);
-    const idx = node.title.indexOf(node.portalChar);
-
-    if (idx === -1) {
-      return <>{node.title}</>;
-    }
-
-    return (
-      <>
-        {node.title.slice(0, idx)}
-        <span
-          className="portal-char"
-          style={{
-            opacity: portalOpacity,
-            color: node.accentColor,
-            textShadow: flatNode.childRevealProgress > 0
-              ? `0 0 ${8 + flatNode.childRevealProgress * 20}px ${node.accentColor}`
-              : 'none',
-          }}
-          data-portal={node.portalChar}
-        >
-          {node.portalChar}
-        </span>
-        {node.title.slice(idx + node.portalChar.length)}
-      </>
-    );
-  };
-
-  // Main draw + paint loop
+  // Main draw loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     let rafId = 0;
     let needsDraw = true;
-    let lastTime = 0;
 
-    const unsubCamera = subscribe(() => {
+    const unsub = subscribe(() => {
       needsDraw = true;
     });
 
@@ -105,35 +64,27 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
     };
     window.addEventListener('resize', onResize);
 
-    // Handle the paint event — this is the html-in-canvas API
     const onPaint = () => {
       needsDraw = true;
     };
     canvas.addEventListener('paint', onPaint);
 
-    const loop = (time: number) => {
-      const dt = lastTime ? (time - lastTime) / 1000 : 0;
-      lastTime = time;
-
-      // Animate dash offset for connection lines
-      dashOffsetRef.current -= dt * 30;
-
+    const loop = () => {
       if (needsDraw) {
-        draw(canvas, ctx, cameraRef.current!, nodeRefsMap.current, flatNodes, dashOffsetRef.current);
+        draw(canvas, ctx, cameraRef.current!, h1Ref.current, h2Ref.current, oOffset);
         needsDraw = false;
       }
       rafId = requestAnimationFrame(loop);
     };
-
     rafId = requestAnimationFrame(loop);
 
     return () => {
       cancelAnimationFrame(rafId);
-      unsubCamera();
+      unsub();
       window.removeEventListener('resize', onResize);
       canvas.removeEventListener('paint', onPaint);
     };
-  }, [cameraRef, subscribe, flatNodes]);
+  }, [cameraRef, subscribe, oOffset]);
 
   return (
     <canvas
@@ -148,119 +99,48 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
         height: '100%',
       }}
     >
-      {/* HTML nodes are direct children of the canvas */}
-      {flatNodes.map((flatNode) => {
-        const { node } = flatNode;
-        const lod = getLOD(node, flatNode.worldX, flatNode.worldY, cam, vw, vh);
-        if (lod === 'hidden') return null;
+      {/* Layer 0: the h1 "Welcome" */}
+      <div
+        ref={h1Ref}
+        style={{
+          width: H1_WIDTH,
+          height: H1_HEIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <h1 className="welcome-text">
+          Welc<span ref={portalRef} className="portal-o">o</span>me
+        </h1>
+      </div>
 
-        const childOpacity = getChildOpacity(flatNode);
-
-        // Skip rendering children that are barely visible
-        if (childOpacity < 0.01 && flatNode.parent !== null) return null;
-
-        return (
-          <div
-            key={node.id}
-            ref={setNodeRef(node.id)}
-            data-node-id={node.id}
-            data-lod={lod}
-            data-world-x={flatNode.worldX}
-            data-world-y={flatNode.worldY}
-            style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              width: node.width,
-              height: lod === 'dot' ? 12 : lod === 'card' ? 'auto' : node.height,
-              opacity: flatNode.parent ? childOpacity : 1,
-              transition: 'opacity 0.15s ease-out',
-            }}
-          >
-            {lod === 'dot' ? (
-              <div
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: '50%',
-                  backgroundColor: node.accentColor,
-                  opacity: 0.6,
-                }}
-              />
-            ) : lod === 'card' ? (
-              <div
-                style={{
-                  padding: '16px 20px',
-                  background: 'rgba(16, 16, 24, 0.9)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  borderRadius: 12,
-                  boxShadow: `0 0 20px ${node.accentColor}15`,
-                }}
-              >
-                <h2
-                  style={{
-                    margin: 0,
-                    fontSize: 18,
-                    fontWeight: 600,
-                    color: node.accentColor,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                >
-                  {renderTitle(flatNode)}
-                </h2>
-              </div>
-            ) : (
-              <div
-                className={`node-card ${flatNode.childRevealProgress > 0 ? 'revealing' : ''}`}
-                style={{
-                  width: node.width,
-                  height: node.height,
-                  background: 'rgba(16, 16, 24, 0.9)',
-                  border: `1px solid rgba(255, 255, 255, ${0.1 + flatNode.childRevealProgress * 0.1})`,
-                  borderRadius: 12,
-                  padding: '24px 28px',
-                  boxShadow: flatNode.childRevealProgress > 0
-                    ? `0 0 ${30 + flatNode.childRevealProgress * 40}px ${node.accentColor}${Math.round(32 + flatNode.childRevealProgress * 30).toString(16)}`
-                    : `0 0 30px ${node.accentColor}20, inset 0 0 0 1px rgba(255,255,255,0.03)`,
-                  overflow: 'hidden',
-                }}
-              >
-                <h2
-                  style={{
-                    margin: '0 0 12px 0',
-                    fontSize: 22,
-                    fontWeight: 700,
-                    color: node.accentColor,
-                    letterSpacing: '-0.02em',
-                  }}
-                >
-                  {renderTitle(flatNode)}
-                </h2>
-                <div
-                  className="node-content"
-                  dangerouslySetInnerHTML={{ __html: node.content }}
-                />
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {/* Layer 1: the h2 "to the zoom grid" — drawn tiny at the O's center */}
+      <div
+        ref={h2Ref}
+        style={{
+          width: H2_WIDTH,
+          height: H2_HEIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <h2 className="inner-text">to the zoom grid</h2>
+      </div>
     </canvas>
   );
 }
 
-/**
- * Main draw function — draws grid + connection curves + HTML elements into the canvas
- */
+// ── Drawing ────────────────────────────────────────────────────────
+
 function draw(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   cam: Camera,
-  nodeRefs: Map<string, HTMLDivElement>,
-  flatNodes: FlatNode[],
-  dashOffset: number,
+  h1El: HTMLDivElement | null,
+  h2El: HTMLDivElement | null,
+  oOffset: { x: number; y: number },
 ) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
@@ -274,119 +154,57 @@ function draw(
     canvas.height = bh;
   }
 
-  // Reset and clear
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  // ── Draw dot grid ────────────────────────────────────────────
+  // ── Dot grid ──────────────────────────────────────────────────
   drawDotGrid(ctx, cam, w, h);
 
-  // ── Draw connection curves between parents and children ──────
-  drawConnections(ctx, cam, w, h, flatNodes, dashOffset);
-
-  // ── Draw HTML elements via drawElementImage ───────────────────
+  // ── Camera CTM ────────────────────────────────────────────────
   ctx.save();
   ctx.setTransform(
-    cam.zoom * dpr,
-    0,
-    0,
-    cam.zoom * dpr,
+    cam.zoom * dpr, 0, 0, cam.zoom * dpr,
     (w / 2 - cam.x * cam.zoom) * dpr,
     (h / 2 - cam.y * cam.zoom) * dpr,
   );
 
-  // Draw each node element at its world position
-  for (const flatNode of flatNodes) {
-    const el = nodeRefs.get(flatNode.node.id);
-    if (!el) continue;
+  const drawFn = (ctx as any).drawElementImage;
+  if (!drawFn) {
+    ctx.restore();
+    return;
+  }
 
+  // ── Draw h1 "Welcome" centered at world origin ────────────────
+  if (h1El) {
+    ctx.save();
+    ctx.translate(-H1_WIDTH / 2, -H1_HEIGHT / 2);
     try {
-      ctx.save();
-      ctx.translate(flatNode.worldX, flatNode.worldY);
+      const transform = drawFn.call(ctx, h1El, 0, 0);
+      if (transform) h1El.style.transform = transform.toString();
+    } catch { /* first frame before paint */ }
+    ctx.restore();
+  }
 
-      const drawFn = (ctx as any).drawElementImage;
-      if (drawFn) {
-        const transform = drawFn.call(ctx, el, 0, 0);
-        if (transform) {
-          el.style.transform = transform.toString();
-        }
-      }
-
-      ctx.restore();
-    } catch {
-      // drawElementImage may throw if snapshot not yet recorded
-    }
+  // ── Draw h2 "to the zoom grid" inside the O ──────────────────
+  // Positioned at O's center, scaled down by NEST_SCALE so it's
+  // a tiny speck at zoom 1x but readable when you zoom to ~30x
+  if (h2El) {
+    ctx.save();
+    ctx.translate(oOffset.x, oOffset.y);
+    ctx.scale(NEST_SCALE, NEST_SCALE);
+    ctx.translate(-H2_WIDTH / 2, -H2_HEIGHT / 2);
+    try {
+      const transform = drawFn.call(ctx, h2El, 0, 0);
+      if (transform) h2El.style.transform = transform.toString();
+    } catch { /* first frame before paint */ }
+    ctx.restore();
   }
 
   ctx.restore();
 }
 
-/**
- * Draw bezier connection curves between parent and child nodes
- */
-function drawConnections(
-  ctx: CanvasRenderingContext2D,
-  cam: Camera,
-  w: number,
-  h: number,
-  flatNodes: FlatNode[],
-  dashOffset: number,
-) {
-  for (const flatNode of flatNodes) {
-    if (!flatNode.parent) continue;
+// ── Dot grid ───────────────────────────────────────────────────────
 
-    const parentOpacity = flatNode.parent.childRevealProgress;
-    if (parentOpacity < 0.01) continue;
-
-    const parent = flatNode.parent;
-
-    // Parent center in screen space
-    const parentScreenX = (parent.worldX + parent.node.width / 2 - cam.x) * cam.zoom + w / 2;
-    const parentScreenY = (parent.worldY + parent.node.height / 2 - cam.y) * cam.zoom + h / 2;
-
-    // Child center in screen space
-    const childScreenX = (flatNode.worldX + flatNode.node.width / 2 - cam.x) * cam.zoom + w / 2;
-    const childScreenY = (flatNode.worldY + flatNode.node.height / 2 - cam.y) * cam.zoom + h / 2;
-
-    // Skip if both endpoints are way off screen
-    if (
-      (parentScreenX < -200 && childScreenX < -200) ||
-      (parentScreenX > w + 200 && childScreenX > w + 200) ||
-      (parentScreenY < -200 && childScreenY < -200) ||
-      (parentScreenY > h + 200 && childScreenY > h + 200)
-    ) {
-      continue;
-    }
-
-    // Draw bezier curve
-    const cpOffset = Math.abs(childScreenY - parentScreenY) * 0.4;
-
-    ctx.save();
-    ctx.globalAlpha = parentOpacity * 0.5;
-    ctx.strokeStyle = flatNode.node.accentColor;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([8, 4]);
-    ctx.lineDashOffset = dashOffset;
-
-    ctx.beginPath();
-    ctx.moveTo(parentScreenX, parentScreenY);
-    ctx.bezierCurveTo(
-      parentScreenX,
-      parentScreenY + cpOffset,
-      childScreenX,
-      childScreenY - cpOffset,
-      childScreenX,
-      childScreenY,
-    );
-    ctx.stroke();
-
-    ctx.restore();
-  }
-}
-
-/**
- * Draw the fractal dot grid
- */
 function drawDotGrid(ctx: CanvasRenderingContext2D, cam: Camera, w: number, h: number) {
   const BASE = 50;
 

@@ -13,57 +13,6 @@ html, body, #root {
   box-sizing: border-box;
 }
 
-/* ── Node content styling ──────────────────────────────────────── */
-.node-content p {
-  margin: 0 0 10px 0;
-  font-size: 14px;
-  line-height: 1.6;
-  color: #c8c8d0;
-}
-
-.node-content ul {
-  margin: 0 0 12px 0;
-  padding-left: 20px;
-}
-
-.node-content li {
-  font-size: 13px;
-  line-height: 1.6;
-  color: #b0b0b8;
-  margin-bottom: 4px;
-}
-
-.node-content code {
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 1px 5px;
-  border-radius: 4px;
-  color: #d0d0e0;
-}
-
-.node-content pre {
-  margin: 8px 0 0 0;
-  padding: 12px 16px;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  overflow-x: auto;
-}
-
-.node-content pre code {
-  background: none;
-  padding: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #a0a0c0;
-}
-
-.node-content strong {
-  color: #e0e0f0;
-  font-weight: 600;
-}
-
 .viewport {
   width: 100vw;
   height: 100vh;
@@ -77,14 +26,28 @@ html, body, #root {
   cursor: grabbing;
 }
 
-/* ── Portal character styling ──────────────────────────────────── */
-.portal-char {
-  display: inline;
+/* ── Welcome text (h1) ────────────────────────────────────────── */
+.welcome-text {
+  margin: 0;
+  font-size: 120px;
   font-weight: 800;
-  transition: opacity 0.1s ease-out, text-shadow 0.2s ease-out;
+  letter-spacing: -0.03em;
+  color: #ffffff;
+  white-space: nowrap;
 }
 
-/* ── Node card reveal state ────────────────────────────────────── */
-.node-card.revealing {
-  border-color: rgba(255, 255, 255, 0.2);
+/* ── Portal "O" character ─────────────────────────────────────── */
+.portal-o {
+  display: inline;
+  color: #ffffff;
+}
+
+/* ── Inner text (h2) ──────────────────────────────────────────── */
+.inner-text {
+  margin: 0;
+  font-size: 64px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  white-space: nowrap;
 }
