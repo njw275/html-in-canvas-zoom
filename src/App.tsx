@@ -6,9 +6,9 @@ import { DebugPane } from './components/DebugPane';
 import './index.css';
 
 const DEFAULT_DEBUG = {
-  nestScale: 1 / 30,
+  nestScale: 1 / 1000,
   minZoom: 0.0001,
-  maxZoom: 100000,
+  maxZoom: 1e7,
 };
 
 export default function App() {

@@ -155,7 +155,7 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
           <input
             type="range"
             min={2}
-            max={7}
+            max={8}
             step={0.1}
             value={Math.log10(values.maxZoom)}
             onChange={(e) =>
