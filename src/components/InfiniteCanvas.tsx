@@ -181,9 +181,17 @@ function drawAll(
       continue;
     }
 
-    // Latch anchor on first visible frame: place this level's
-    // world-space center at wherever the camera is right now.
-    if (anchors[i] == null) {
+    // Keep the level pinned to screen center while it's still too
+    // small to read.  Once it crosses the readable threshold
+    // (LOCK_WIDTH px on screen) we lock the anchor so the user can
+    // pan around it like a real object.  While it's sub-readable,
+    // re-anchoring every frame means it always "pops in" centered
+    // regardless of focal-point zoom drift.
+    const LOCK_WIDTH = 120;               // px — roughly when text becomes legible
+    const locked = screenWidth >= LOCK_WIDTH;
+
+    if (anchors[i] == null || !locked) {
+      // Pin to camera center (appears at screen center)
       anchors[i] = { x: cam.x, y: cam.y };
     }
 
@@ -191,21 +199,16 @@ function drawAll(
     let sx = (anchors[i]!.x - cam.x) * cam.zoom + w / 2;
     let sy = (anchors[i]!.y - cam.y) * cam.zoom + h / 2;
 
-    // Re-anchor if the level center has drifted entirely off-screen.
-    // This happens during deep zooming with the cursor off-center:
-    // focal-point zoom shifts cam.x/y, and at zoom 1e6+ even a tiny
-    // world-space drift becomes tens of thousands of screen pixels.
-    // Re-anchor once the nearest edge of the text box crosses the
-    // viewport edge (i.e. the element is entirely off-screen).
-    // Previous margin (w + screenWidth) was ~2x too generous and
-    // allowed the element to drift a full viewport width past the
-    // edge before correcting — making deeper levels invisible.
-    const marginX = w / 2 + screenWidth / 2;
-    const marginY = h / 2 + screenHeight / 2;
-    if (Math.abs(sx - w / 2) > marginX || Math.abs(sy - h / 2) > marginY) {
-      anchors[i] = { x: cam.x, y: cam.y };
-      sx = w / 2;
-      sy = h / 2;
+    // Re-anchor if the locked level has drifted entirely off-screen
+    // (happens during deep zooming with the cursor far off-center).
+    if (locked) {
+      const marginX = w / 2 + screenWidth / 2;
+      const marginY = h / 2 + screenHeight / 2;
+      if (Math.abs(sx - w / 2) > marginX || Math.abs(sy - h / 2) > marginY) {
+        anchors[i] = { x: cam.x, y: cam.y };
+        sx = w / 2;
+        sy = h / 2;
+      }
     }
 
     // Fresh CTM per level (avoids float32 precision issues)
