@@ -2,10 +2,12 @@ import { useRef, useCallback } from 'react';
 import type { Camera, Point } from '../utils/math';
 import { screenToWorld, clamp } from '../utils/math';
 
-const MIN_ZOOM = 0.0001;
-const MAX_ZOOM = 100000;
+interface ZoomLimits {
+  minZoom: number;
+  maxZoom: number;
+}
 
-export function useCamera() {
+export function useCamera(limitsRef: React.RefObject<ZoomLimits>) {
   const cameraRef = useRef<Camera>({ x: 0, y: 0, zoom: 1 });
   const subscribersRef = useRef<Set<() => void>>(new Set());
 
@@ -22,12 +24,13 @@ export function useCamera() {
   const zoomTo = useCallback(
     (targetZoom: number, focalScreenPoint: Point, viewport: { width: number; height: number }) => {
       const cam = cameraRef.current;
+      const { minZoom, maxZoom } = limitsRef.current!;
 
       // Convert focal screen point to world coords using current camera
       const worldFocal = screenToWorld(focalScreenPoint, cam, viewport);
 
       // Clamp the new zoom
-      const newZoom = clamp(targetZoom, MIN_ZOOM, MAX_ZOOM);
+      const newZoom = clamp(targetZoom, minZoom, maxZoom);
 
       // Recalculate camera position so the focal world point stays at the same screen position
       cam.x = worldFocal.x - (focalScreenPoint.x - viewport.width / 2) / newZoom;
@@ -36,8 +39,18 @@ export function useCamera() {
 
       notify();
     },
-    [notify],
+    [notify, limitsRef],
   );
+
+  /** Imperatively set camera position + zoom (for debug pane) */
+  const setCameraTo = useCallback((x: number, y: number, zoom: number) => {
+    const { minZoom, maxZoom } = limitsRef.current!;
+    const cam = cameraRef.current;
+    cam.x = x;
+    cam.y = y;
+    cam.zoom = clamp(zoom, minZoom, maxZoom);
+    notify();
+  }, [notify, limitsRef]);
 
   const subscribe = useCallback((callback: () => void): (() => void) => {
     subscribersRef.current.add(callback);
@@ -46,5 +59,5 @@ export function useCamera() {
     };
   }, []);
 
-  return { cameraRef, panBy, zoomTo, subscribe };
+  return { cameraRef, panBy, zoomTo, setCameraTo, subscribe };
 }

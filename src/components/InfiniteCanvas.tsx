@@ -4,24 +4,16 @@ import type { Camera } from '../utils/math';
 interface Props {
   cameraRef: React.RefObject<Camera>;
   subscribe: (cb: () => void) => () => void;
+  nestScale: number;
 }
 
 // ── World-space layout constants ───────────────────────────────────
-// h1 container: sized to hold "Welcome" at 120px comfortably
 const H1_WIDTH = 900;
 const H1_HEIGHT = 200;
-
-// h2 container: normal readable size (gets scaled down by NEST_SCALE)
 const H2_WIDTH = 700;
 const H2_HEIGHT = 120;
 
-// How much smaller the h2 is in world space.
-// At zoom 1x:  h2 is ~23px wide — invisible speck inside the O
-// At zoom 10x: h2 is 233px wide — starting to read
-// At zoom 30x: h2 is 700px wide — fully readable, O is off-screen
-const NEST_SCALE = 1 / 30;
-
-export function InfiniteCanvas({ cameraRef, subscribe }: Props) {
+export function InfiniteCanvas({ cameraRef, subscribe, nestScale }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const h1Ref = useRef<HTMLDivElement>(null);
   const h2Ref = useRef<HTMLDivElement>(null);
@@ -71,7 +63,7 @@ export function InfiniteCanvas({ cameraRef, subscribe }: Props) {
 
     const loop = () => {
       if (needsDraw) {
-        draw(canvas, ctx, cameraRef.current!, h1Ref.current, h2Ref.current, oOffset);
+        draw(canvas, ctx, cameraRef.current!, h1Ref.current, h2Ref.current, oOffset, nestScale);
         needsDraw = false;
       }
       rafId = requestAnimationFrame(loop);
@@ -84,7 +76,7 @@ export function InfiniteCanvas({ cameraRef, subscribe }: Props) {
       window.removeEventListener('resize', onResize);
       canvas.removeEventListener('paint', onPaint);
     };
-  }, [cameraRef, subscribe, oOffset]);
+  }, [cameraRef, subscribe, oOffset, nestScale]);
 
   return (
     <canvas
@@ -141,6 +133,7 @@ function draw(
   h1El: HTMLDivElement | null,
   h2El: HTMLDivElement | null,
   oOffset: { x: number; y: number },
+  nestScale: number,
 ) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
@@ -186,12 +179,12 @@ function draw(
   }
 
   // ── Draw h2 "to the zoom grid" inside the O ──────────────────
-  // Positioned at O's center, scaled down by NEST_SCALE so it's
+  // Positioned at O's center, scaled down by nestScale so it's
   // a tiny speck at zoom 1x but readable when you zoom to ~30x
   if (h2El) {
     ctx.save();
     ctx.translate(oOffset.x, oOffset.y);
-    ctx.scale(NEST_SCALE, NEST_SCALE);
+    ctx.scale(nestScale, nestScale);
     ctx.translate(-H2_WIDTH / 2, -H2_HEIGHT / 2);
     try {
       const transform = drawFn.call(ctx, h2El, 0, 0);
