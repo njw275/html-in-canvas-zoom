@@ -22,6 +22,12 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
   // Refs to each level's container div
   const levelRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  // Latched world-space anchors for each level.
+  // Level 0 is always at origin. Level i>0 latches to the camera
+  // position when it first becomes visible, and resets when it
+  // goes out of view (so it re-latches next time you zoom in).
+  const anchorsRef = useRef<({ x: number; y: number } | null)[]>([]);
+
   // Main draw loop
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,7 +47,7 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
 
     const loop = () => {
       if (needsDraw) {
-        drawAll(canvas, ctx, cameraRef.current!, levels, levelRefs.current, nestScale);
+        drawAll(canvas, ctx, cameraRef.current!, levels, levelRefs.current, nestScale, anchorsRef.current);
         needsDraw = false;
       }
       rafId = requestAnimationFrame(loop);
@@ -115,6 +121,7 @@ function drawAll(
   levels: ZoomLevel[],
   levelEls: (HTMLDivElement | null)[],
   nestScale: number,
+  anchors: ({ x: number; y: number } | null)[],
 ) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
@@ -137,15 +144,21 @@ function drawAll(
   const drawFn = (ctx as any).drawElementImage;
   if (!drawFn) return;
 
-  // ── Relative zoom-depth rendering ─────────────────────────────
-  // Each level is always drawn centered on the camera (wherever you
-  // are looking). The zoom *depth* determines which level is visible,
-  // not your position. This means zooming into any "o" (or any spot)
-  // reveals the next level — it's the magnification that matters.
+  // ── Latched anchor rendering ──────────────────────────────────
+  // Level 0 is always at world origin. For deeper levels, we latch
+  // the anchor to the camera's current position (i.e. where you're
+  // looking) the moment that level first becomes visible. This means
+  // you can zoom into any spot and the next level appears there —
+  // and once placed, it's a real object you can pan around.
   //
-  // Level i is visible when cam.zoom is around (1/nestScale)^i,
-  // i.e. effectiveZoom = cam.zoom * nestScale^i ≈ 1 means that
-  // level's text is at "native" size.
+  // When you zoom back out and a level leaves the visible range,
+  // its anchor resets so it re-latches fresh next time.
+  //
+  // "Visible" = the level's content would be at least a few pixels
+  // on screen but not blown up past 50x the viewport.
+
+  // Level 0 always anchored at origin
+  anchors[0] = { x: 0, y: 0 };
 
   for (let i = 0; i < levels.length; i++) {
     const el = levelEls[i];
@@ -155,16 +168,35 @@ function drawAll(
     const effectiveZoom = cam.zoom * Math.pow(nestScale, i);
     const screenWidth = LEVEL_WIDTH * effectiveZoom;
 
-    // Skip if too small to see (< 2px) or too zoomed in (text > 50x viewport)
-    if (screenWidth < 2 || screenWidth > w * 50) continue;
+    // Visibility check
+    const visible = screenWidth >= 2 && screenWidth <= w * 50;
 
-    // Always draw centered on screen (viewport center)
+    if (!visible) {
+      // Reset anchor so it re-latches next time
+      anchors[i] = null;
+      continue;
+    }
+
+    // Latch anchor on first visible frame: place this level's
+    // world-space center at wherever the camera is right now.
+    // The anchor is in the *parent level's* coordinate space —
+    // i.e. in world units scaled by nestScale^i.
+    if (anchors[i] == null) {
+      anchors[i] = { x: cam.x, y: cam.y };
+    }
+    const anchor = anchors[i]!;
+
+    // Screen-space center: project the anchor through the camera
+    const sx = (anchor.x - cam.x) * cam.zoom + w / 2;
+    const sy = (anchor.y - cam.y) * cam.zoom + h / 2;
+
+    // Fresh CTM per level (avoids float32 precision issues)
     ctx.setTransform(
       effectiveZoom * dpr, 0, 0, effectiveZoom * dpr,
-      (w / 2) * dpr, (h / 2) * dpr,
+      sx * dpr, sy * dpr,
     );
 
-    // Draw this level centered on its screen position
+    // Draw centered
     ctx.save();
     ctx.translate(-LEVEL_WIDTH / 2, -levelHeight(i) / 2);
     try {
