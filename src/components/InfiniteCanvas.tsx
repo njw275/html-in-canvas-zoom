@@ -154,8 +154,11 @@ function drawAll(
   // When you zoom back out and a level leaves the visible range,
   // its anchor resets so it re-latches fresh next time.
   //
-  // "Visible" = the level's content would be at least a few pixels
-  // on screen but not blown up past 50x the viewport.
+  // To handle focal-point zoom drift (cursor off-center shifts the
+  // camera in world space, which at deep zoom levels amplifies into
+  // huge screen offsets), we re-anchor any level whose center has
+  // drifted entirely off-screen.  Since the text is already invisible
+  // when this happens, the re-anchor is seamless.
 
   // Level 0 always anchored at origin
   anchors[0] = { x: 0, y: 0 };
@@ -167,6 +170,7 @@ function drawAll(
     // How zoomed-in this level's content appears on screen
     const effectiveZoom = cam.zoom * Math.pow(nestScale, i);
     const screenWidth = LEVEL_WIDTH * effectiveZoom;
+    const screenHeight = levelHeight(i) * effectiveZoom;
 
     // Visibility check
     const visible = screenWidth >= 2 && screenWidth <= w * 50;
@@ -179,16 +183,27 @@ function drawAll(
 
     // Latch anchor on first visible frame: place this level's
     // world-space center at wherever the camera is right now.
-    // The anchor is in the *parent level's* coordinate space —
-    // i.e. in world units scaled by nestScale^i.
     if (anchors[i] == null) {
       anchors[i] = { x: cam.x, y: cam.y };
     }
-    const anchor = anchors[i]!;
 
     // Screen-space center: project the anchor through the camera
-    const sx = (anchor.x - cam.x) * cam.zoom + w / 2;
-    const sy = (anchor.y - cam.y) * cam.zoom + h / 2;
+    let sx = (anchors[i]!.x - cam.x) * cam.zoom + w / 2;
+    let sy = (anchors[i]!.y - cam.y) * cam.zoom + h / 2;
+
+    // Re-anchor if the level center has drifted entirely off-screen.
+    // This happens during deep zooming with the cursor off-center:
+    // focal-point zoom shifts cam.x/y, and at zoom 1e6+ even a tiny
+    // world-space drift becomes tens of thousands of screen pixels.
+    // The margin ensures the ENTIRE text box is off-screen before
+    // re-anchoring, so the snap is invisible to the user.
+    const marginX = w + screenWidth;
+    const marginY = h + screenHeight;
+    if (Math.abs(sx - w / 2) > marginX || Math.abs(sy - h / 2) > marginY) {
+      anchors[i] = { x: cam.x, y: cam.y };
+      sx = w / 2;
+      sy = h / 2;
+    }
 
     // Fresh CTM per level (avoids float32 precision issues)
     ctx.setTransform(
