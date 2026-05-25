@@ -19,26 +19,30 @@ export interface FlatNode {
 }
 
 // ── Reveal thresholds ──────────────────────────────────────────────
-// When the portal character reaches REVEAL_START px on screen, children
-// begin fading in. At REVEAL_END they're fully opaque.
-const REVEAL_START = 150;  // px — portal char apparent size to begin reveal
-const REVEAL_END = 400;    // px — portal char apparent size for full reveal
-
-// Approximate width of a single character in the title at font-size 22px
-const CHAR_WIDTH_APPROX = 14; // px in world space (before zoom)
+// Children start appearing when the parent node's apparent width on
+// screen reaches REVEAL_START_PX, and are fully visible at REVEAL_END_PX.
+const REVEAL_START_PX = 600;   // node apparent width to begin child reveal
+const REVEAL_END_PX = 1200;    // node apparent width for full child reveal
 
 /**
  * Calculate the reveal progress for a node's children based on how
- * large the portal character appears on screen.
+ * large the node itself appears on screen.
  *
- * The portal char's world-space width is ~CHAR_WIDTH_APPROX px.
- * Its screen-space width is that × camera.zoom.
- * We map that into [0, 1] over the [REVEAL_START, REVEAL_END] range.
+ * Root node (level 0) always reveals its children — they're the
+ * initial mind map layout. For deeper nodes, children fade in as
+ * the node grows to fill the viewport.
  */
 export function getRevealProgress(node: MindMapNode, camera: Camera): number {
-  // How big the portal char appears on screen
-  const portalScreenWidth = CHAR_WIDTH_APPROX * camera.zoom;
-  return clamp((portalScreenWidth - REVEAL_START) / (REVEAL_END - REVEAL_START), 0, 1);
+  // Root always shows its children
+  if (node.level === 0) return 1;
+
+  // How big this node appears on screen
+  const apparentWidth = node.width * camera.zoom;
+  return clamp(
+    (apparentWidth - REVEAL_START_PX) / (REVEAL_END_PX - REVEAL_START_PX),
+    0,
+    1,
+  );
 }
 
 /**
