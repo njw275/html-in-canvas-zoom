@@ -195,10 +195,13 @@ function drawAll(
     // This happens during deep zooming with the cursor off-center:
     // focal-point zoom shifts cam.x/y, and at zoom 1e6+ even a tiny
     // world-space drift becomes tens of thousands of screen pixels.
-    // The margin ensures the ENTIRE text box is off-screen before
-    // re-anchoring, so the snap is invisible to the user.
-    const marginX = w + screenWidth;
-    const marginY = h + screenHeight;
+    // Re-anchor once the nearest edge of the text box crosses the
+    // viewport edge (i.e. the element is entirely off-screen).
+    // Previous margin (w + screenWidth) was ~2x too generous and
+    // allowed the element to drift a full viewport width past the
+    // edge before correcting — making deeper levels invisible.
+    const marginX = w / 2 + screenWidth / 2;
+    const marginY = h / 2 + screenHeight / 2;
     if (Math.abs(sx - w / 2) > marginX || Math.abs(sy - h / 2) > marginY) {
       anchors[i] = { x: cam.x, y: cam.y };
       sx = w / 2;
