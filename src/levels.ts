@@ -54,6 +54,7 @@ export function levelLabel(level: ZoomLevel): string {
 export const DEFAULT_LEVELS: ZoomLevel[] = [
   { text: 'Welcome', portalIndex: 4 },
   { text: 'to the zoom grid', portalIndex: 8 },
+  { imageUrl: '/cat.jpg', portalPosition: { x: 38, y: 42 } },
   { text: 'going deeper', portalIndex: 1 },
   { text: 'how far down', portalIndex: 2 },
   { text: 'bottom' },
