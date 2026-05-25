@@ -26,8 +26,13 @@ export function useGestures(
 
     const { cameraRef, panBy, zoomTo } = camera;
 
+    // Skip gesture handling for clicks/scrolls inside UI overlays
+    const isUI = (e: Event) =>
+      (e.target as HTMLElement)?.closest?.('[data-no-drag]') != null;
+
     // ── Wheel zoom (+ trackpad pinch) ──────────────────────────────
     const onWheel = (e: WheelEvent) => {
+      if (isUI(e)) return;
       e.preventDefault();
 
       const isPinch = e.ctrlKey; // browsers set ctrlKey for pinch gestures
@@ -46,6 +51,7 @@ export function useGestures(
 
     // ── Drag pan ───────────────────────────────────────────────────
     const onPointerDown = (e: PointerEvent) => {
+      if (isUI(e)) return;
       isDragging.current = true;
       lastPointerPos.current = { x: e.clientX, y: e.clientY };
       el.setPointerCapture(e.pointerId);

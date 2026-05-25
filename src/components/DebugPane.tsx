@@ -72,6 +72,7 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
       <button
         onClick={() => setCollapsed(false)}
         onPointerDown={stopProp}
+        data-no-drag
         style={toggleBtnStyle}
         title="Open debug pane"
       >
@@ -81,7 +82,7 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
   }
 
   return (
-    <div style={panelStyle} onPointerDown={stopProp} onMouseDown={stopProp} onWheel={stopProp}>
+    <div style={panelStyle} data-no-drag onPointerDown={stopProp} onMouseDown={stopProp} onWheel={stopProp}>
       <div style={headerStyle}>
         <span style={{ fontWeight: 700, fontSize: 13 }}>🔧 Debug</span>
         <button onClick={() => setCollapsed(true)} style={closeBtnStyle}>✕</button>
