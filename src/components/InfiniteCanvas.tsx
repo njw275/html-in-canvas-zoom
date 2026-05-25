@@ -10,9 +10,12 @@ interface Props {
   levels: ZoomLevel[];
 }
 
-// Each level's DOM container is this size in world-space
+// Each level's DOM container width in world-space
 const LEVEL_WIDTH = 900;
-const LEVEL_HEIGHT = 200;
+// Per-level height — tighter to the text so vertical centering is accurate
+function levelHeight(i: number): number {
+  return i === 0 ? 150 : 100;
+}
 
 export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -104,13 +107,14 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
     >
       {levels.map((level, i) => {
         const split = splitAtPortal(level);
+        const lh = levelHeight(i);
         return (
           <div
             key={i}
             ref={(el) => { levelRefs.current[i] = el; }}
             style={{
               width: LEVEL_WIDTH,
-              height: LEVEL_HEIGHT,
+              height: lh,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -177,65 +181,61 @@ function drawAll(
   // ── Dot grid ──────────────────────────────────────────────────
   drawDotGrid(ctx, cam, w, h);
 
-  // ── Camera CTM ────────────────────────────────────────────────
-  ctx.save();
-  ctx.setTransform(
-    cam.zoom * dpr, 0, 0, cam.zoom * dpr,
-    (w / 2 - cam.x * cam.zoom) * dpr,
-    (h / 2 - cam.y * cam.zoom) * dpr,
-  );
-
   const drawFn = (ctx as any).drawElementImage;
-  if (!drawFn) {
-    ctx.restore();
-    return;
-  }
+  if (!drawFn) return;
 
-  // Draw each level. Level 0 is at the origin; each subsequent level
-  // is translated to the portal of its parent and scaled by nestScale.
-  //
-  // We accumulate the transform: for level i, the CTM has already been
-  // scaled by nestScale^i relative to the camera, so we just need to
-  // translate to the parent's portal offset, scale, then draw.
+  // ── Per-level rendering with fresh CTM ──────────────────────
+  // Instead of accumulating transforms on the canvas CTM (which uses
+  // float32 internally and loses precision at deep zoom levels like
+  // 1e6+), we compute each level's world-space center in double-
+  // precision JS math, then set a fresh CTM per level.  This keeps
+  // the float32 matrix values small and eliminates jitter/shaking.
+
+  // Pre-compute world-space center for each level.
+  // Level 0 is at origin.  Level i = sum of portal offsets scaled
+  // to world space:  worldCenter[i] += portalOffset[i-1] * nestScale^(i-1)
+  const worldCenters: { x: number; y: number }[] = [];
+  let wcx = 0, wcy = 0;
+  for (let i = 0; i < levels.length; i++) {
+    worldCenters.push({ x: wcx, y: wcy });
+    if (i < levels.length - 1) {
+      const offset = portalOffsets[i] || { x: 0, y: 0 };
+      const s = Math.pow(nestScale, i);
+      wcx += offset.x * s;
+      wcy += offset.y * s;
+    }
+  }
 
   for (let i = 0; i < levels.length; i++) {
     const el = levelEls[i];
     if (!el) continue;
 
-    // Visibility culling: the effective zoom for this level is cam.zoom * nestScale^(-i)
-    // in terms of how big the text appears on screen. If it's way too small or way too big, skip.
-    const effectiveScale = cam.zoom * Math.pow(nestScale, i);
-    const screenWidth = LEVEL_WIDTH * effectiveScale;
+    // Effective zoom for this level's content on screen
+    const effectiveZoom = cam.zoom * Math.pow(nestScale, i);
+    const screenWidth = LEVEL_WIDTH * effectiveZoom;
 
     // Skip if too small to see (< 2px) or too zoomed in (text > 50x viewport)
-    if (screenWidth < 2 || screenWidth > w * 50) {
-      // Still need to apply the transform for the next level
-      if (i < levels.length - 1) {
-        const offset = portalOffsets[i] || { x: 0, y: 0 };
-        ctx.translate(offset.x, offset.y);
-        ctx.scale(nestScale, nestScale);
-      }
-      continue;
-    }
+    if (screenWidth < 2 || screenWidth > w * 50) continue;
 
-    // Draw this level centered
+    // Screen-space center of this level (double-precision arithmetic)
+    const sx = (worldCenters[i].x - cam.x) * cam.zoom + w / 2;
+    const sy = (worldCenters[i].y - cam.y) * cam.zoom + h / 2;
+
+    // Set a fresh CTM — keeps float32 matrix values viewport-sized
+    ctx.setTransform(
+      effectiveZoom * dpr, 0, 0, effectiveZoom * dpr,
+      sx * dpr, sy * dpr,
+    );
+
+    // Draw this level centered on its screen position
     ctx.save();
-    ctx.translate(-LEVEL_WIDTH / 2, -LEVEL_HEIGHT / 2);
+    ctx.translate(-LEVEL_WIDTH / 2, -levelHeight(i) / 2);
     try {
       const transform = drawFn.call(ctx, el, 0, 0);
       if (transform) el.style.transform = transform.toString();
     } catch { /* first frame before paint */ }
     ctx.restore();
-
-    // Set up transform for the next level: translate to portal, scale down
-    if (i < levels.length - 1) {
-      const offset = portalOffsets[i] || { x: 0, y: 0 };
-      ctx.translate(offset.x, offset.y);
-      ctx.scale(nestScale, nestScale);
-    }
   }
-
-  ctx.restore();
 }
 
 // ── Dot grid ───────────────────────────────────────────────────────
