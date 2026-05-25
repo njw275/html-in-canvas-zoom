@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Camera } from '../utils/math';
 import type { ZoomLevel } from '../levels';
+import { isImageLevel } from '../levels';
 
 interface Props {
   cameraRef: React.RefObject<Camera>;
@@ -11,8 +12,9 @@ interface Props {
 
 // Each level's DOM container width in world-space
 const LEVEL_WIDTH = 900;
-// Per-level height — tighter to the text so vertical centering is accurate
-function levelHeight(i: number): number {
+// Per-level height — images get a taller container for proper aspect ratio
+function levelHeight(i: number, levels?: ZoomLevel[]): number {
+  if (levels && levels[i] && isImageLevel(levels[i])) return 600;
   return i === 0 ? 150 : 100;
 }
 
@@ -80,7 +82,8 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
       }}
     >
       {levels.map((level, i) => {
-        const lh = levelHeight(i);
+        const lh = levelHeight(i, levels);
+        const isImage = isImageLevel(level);
         return (
           <div
             key={i}
@@ -91,20 +94,33 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              overflow: 'hidden',
             }}
           >
-            <span
-              style={{
-                margin: 0,
-                fontSize: fontSize(i),
-                fontWeight: fontWeight(i),
-                letterSpacing: '-0.03em',
-                color: '#ffffff',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {level.text}
-            </span>
+            {isImage ? (
+              <img
+                src={level.imageUrl}
+                style={{
+                  width: LEVEL_WIDTH,
+                  height: lh,
+                  objectFit: 'cover',
+                  display: 'block',
+                }}
+              />
+            ) : (
+              <span
+                style={{
+                  margin: 0,
+                  fontSize: fontSize(i),
+                  fontWeight: fontWeight(i),
+                  letterSpacing: '-0.03em',
+                  color: '#ffffff',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {level.text}
+              </span>
+            )}
           </div>
         );
       })}
@@ -170,7 +186,7 @@ function drawAll(
     // How zoomed-in this level's content appears on screen
     const effectiveZoom = cam.zoom * Math.pow(nestScale, i);
     const screenWidth = LEVEL_WIDTH * effectiveZoom;
-    const screenHeight = levelHeight(i) * effectiveZoom;
+    const screenHeight = levelHeight(i, levels) * effectiveZoom;
 
     // Visibility check
     const visible = screenWidth >= 2 && screenWidth <= w * 50;
@@ -219,7 +235,7 @@ function drawAll(
 
     // Draw centered
     ctx.save();
-    ctx.translate(-LEVEL_WIDTH / 2, -levelHeight(i) / 2);
+    ctx.translate(-LEVEL_WIDTH / 2, -levelHeight(i, levels) / 2);
     try {
       const transform = drawFn.call(ctx, el, 0, 0);
       if (transform) el.style.transform = transform.toString();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Camera } from '../utils/math';
 import type { ZoomLevel } from '../levels';
-import { splitAtPortal } from '../levels';
+import { splitAtPortal, levelLabel, isImageLevel } from '../levels';
 
 interface DebugValues {
   nestScale: number;
@@ -119,6 +119,7 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
           const z = levelZooms[i];
           const split = splitAtPortal(level);
           const isActive = i === activeLevel;
+          const isImg = isImageLevel(level);
           return (
             <div
               key={i}
@@ -137,7 +138,16 @@ export function DebugPane({ cameraRef, subscribe, values, onValuesChange, setCam
             >
               <span style={{ fontSize: 10, color: '#888', width: 16, flexShrink: 0 }}>L{i}</span>
               <span style={{ fontSize: 11, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {split ? (
+                {isImg ? (
+                  <>
+                    <span style={{ color: '#8cf' }}>{levelLabel(level)}</span>
+                    {level.portalPosition && (
+                      <span style={{ color: '#ff8', fontSize: 9 }}>
+                        {' '}@{level.portalPosition.x},{level.portalPosition.y}%
+                      </span>
+                    )}
+                  </>
+                ) : split ? (
                   <>
                     {split.before}
                     <span style={{ color: '#ff8', fontWeight: 700 }}>{split.portal}</span>
