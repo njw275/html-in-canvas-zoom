@@ -16,7 +16,7 @@ export const mindMapData: MindMapNode = {
   width: 700,
   height: 420,
   title: 'The Infinite Mind Map',
-  portalChar: 'O',
+  portalChar: 'I',
   level: 0,
   accentColor: LEVEL_COLORS[0],
   content: `
@@ -27,7 +27,7 @@ export const mindMapData: MindMapNode = {
       <li>Drag to pan around the universe</li>
       <li>Each level reveals a new world of content</li>
     </ul>
-    <p>Zoom into the letter <strong>"O"</strong> in any title to find what's hidden inside...</p>
+    <p>Zoom into any title to find what's hidden inside...</p>
   `,
   children: [
     {
