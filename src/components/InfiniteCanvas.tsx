@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import type { Camera } from '../utils/math';
 import type { MindMapNode } from '../types';
 import { getLOD } from '../hooks/useLOD';
+import { flattenTree, getChildOpacity, getPortalCharOpacity } from '../utils/nodeTree';
+import type { FlatNode } from '../utils/nodeTree';
 
 interface InfiniteCanvasProps {
   cameraRef: React.RefObject<Camera>;
@@ -14,19 +16,33 @@ interface InfiniteCanvasProps {
  * 1. Renders HTML nodes as direct children of the canvas
  * 2. Draws them into the canvas via ctx.drawElementImage()
  * 3. Uses canvas CTM for zoom/pan — browser re-rasterizes at full fidelity
- * 4. Also draws the dot grid, connections, etc.
- *
- * This uses the WICG html-in-canvas proposal:
- * https://github.com/WICG/html-in-canvas/blob/main/README.md
+ * 4. Draws the dot grid + bezier connection curves
+ * 5. Manages the portal reveal system for continuous zoom
  */
 export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodeRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
-  const [, forceRender] = useState(0);
-  const needsDrawRef = useRef(true);
+  const [renderTick, setRenderTick] = useState(0);
+  const dashOffsetRef = useRef(0);
 
-  // Collect all nodes to render
-  const allNodes: MindMapNode[] = [rootNode, ...rootNode.children];
+  // Force re-render periodically to update LOD/reveal (camera changes are ref-based)
+  useEffect(() => {
+    const unsub = subscribe(() => {
+      setRenderTick((n) => n + 1);
+    });
+    return unsub;
+  }, [subscribe]);
+
+  // Flatten the tree based on current camera state
+  const cam = cameraRef.current!;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  const flatNodes = useMemo(
+    () => flattenTree(rootNode, cam),
+    // renderTick dependency forces recalc on camera changes
+    [rootNode, renderTick],
+  );
 
   // Register a node ref
   const setNodeRef = (id: string) => (el: HTMLDivElement | null) => {
@@ -35,6 +51,37 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
     } else {
       nodeRefsMap.current.delete(id);
     }
+  };
+
+  // Wrap portal char in the title with a span
+  const renderTitle = (flatNode: FlatNode) => {
+    const { node } = flatNode;
+    const portalOpacity = getPortalCharOpacity(flatNode);
+    const idx = node.title.indexOf(node.portalChar);
+
+    if (idx === -1) {
+      return <>{node.title}</>;
+    }
+
+    return (
+      <>
+        {node.title.slice(0, idx)}
+        <span
+          className="portal-char"
+          style={{
+            opacity: portalOpacity,
+            color: node.accentColor,
+            textShadow: flatNode.childRevealProgress > 0
+              ? `0 0 ${8 + flatNode.childRevealProgress * 20}px ${node.accentColor}`
+              : 'none',
+          }}
+          data-portal={node.portalChar}
+        >
+          {node.portalChar}
+        </span>
+        {node.title.slice(idx + node.portalChar.length)}
+      </>
+    );
   };
 
   // Main draw + paint loop
@@ -47,26 +94,32 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
 
     let rafId = 0;
     let needsDraw = true;
+    let lastTime = 0;
 
-    const unsub = subscribe(() => {
+    const unsubCamera = subscribe(() => {
       needsDraw = true;
     });
 
     const onResize = () => {
       needsDraw = true;
-      forceRender((n) => n + 1);
     };
     window.addEventListener('resize', onResize);
 
     // Handle the paint event — this is the html-in-canvas API
     const onPaint = () => {
-      draw(canvas, ctx, cameraRef.current!, nodeRefsMap.current, allNodes);
+      needsDraw = true;
     };
     canvas.addEventListener('paint', onPaint);
 
-    const loop = () => {
+    const loop = (time: number) => {
+      const dt = lastTime ? (time - lastTime) / 1000 : 0;
+      lastTime = time;
+
+      // Animate dash offset for connection lines
+      dashOffsetRef.current -= dt * 30;
+
       if (needsDraw) {
-        draw(canvas, ctx, cameraRef.current!, nodeRefsMap.current, allNodes);
+        draw(canvas, ctx, cameraRef.current!, nodeRefsMap.current, flatNodes, dashOffsetRef.current);
         needsDraw = false;
       }
       rafId = requestAnimationFrame(loop);
@@ -76,15 +129,11 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
 
     return () => {
       cancelAnimationFrame(rafId);
-      unsub();
+      unsubCamera();
       window.removeEventListener('resize', onResize);
       canvas.removeEventListener('paint', onPaint);
     };
-  }, [cameraRef, subscribe, allNodes]);
-
-  const cam = cameraRef.current!;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  }, [cameraRef, subscribe, flatNodes]);
 
   return (
     <canvas
@@ -100,9 +149,15 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
       }}
     >
       {/* HTML nodes are direct children of the canvas */}
-      {allNodes.map((node) => {
-        const lod = getLOD(node, cam, vw, vh);
+      {flatNodes.map((flatNode) => {
+        const { node } = flatNode;
+        const lod = getLOD(node, flatNode.worldX, flatNode.worldY, cam, vw, vh);
         if (lod === 'hidden') return null;
+
+        const childOpacity = getChildOpacity(flatNode);
+
+        // Skip rendering children that are barely visible
+        if (childOpacity < 0.01 && flatNode.parent !== null) return null;
 
         return (
           <div
@@ -110,13 +165,16 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
             ref={setNodeRef(node.id)}
             data-node-id={node.id}
             data-lod={lod}
+            data-world-x={flatNode.worldX}
+            data-world-y={flatNode.worldY}
             style={{
               position: 'absolute',
               left: 0,
               top: 0,
               width: node.width,
               height: lod === 'dot' ? 12 : lod === 'card' ? 'auto' : node.height,
-              // Not visible by default — drawn via drawElementImage
+              opacity: flatNode.parent ? childOpacity : 1,
+              transition: 'opacity 0.15s ease-out',
             }}
           >
             {lod === 'dot' ? (
@@ -150,19 +208,22 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
                     textOverflow: 'ellipsis',
                   }}
                 >
-                  {node.title}
+                  {renderTitle(flatNode)}
                 </h2>
               </div>
             ) : (
               <div
+                className={`node-card ${flatNode.childRevealProgress > 0 ? 'revealing' : ''}`}
                 style={{
                   width: node.width,
                   height: node.height,
                   background: 'rgba(16, 16, 24, 0.9)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  border: `1px solid rgba(255, 255, 255, ${0.1 + flatNode.childRevealProgress * 0.1})`,
                   borderRadius: 12,
                   padding: '24px 28px',
-                  boxShadow: `0 0 30px ${node.accentColor}20, inset 0 0 0 1px rgba(255,255,255,0.03)`,
+                  boxShadow: flatNode.childRevealProgress > 0
+                    ? `0 0 ${30 + flatNode.childRevealProgress * 40}px ${node.accentColor}${Math.round(32 + flatNode.childRevealProgress * 30).toString(16)}`
+                    : `0 0 30px ${node.accentColor}20, inset 0 0 0 1px rgba(255,255,255,0.03)`,
                   overflow: 'hidden',
                 }}
               >
@@ -175,7 +236,7 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
                     letterSpacing: '-0.02em',
                   }}
                 >
-                  {node.title}
+                  {renderTitle(flatNode)}
                 </h2>
                 <div
                   className="node-content"
@@ -191,14 +252,15 @@ export function InfiniteCanvas({ cameraRef, subscribe, rootNode }: InfiniteCanva
 }
 
 /**
- * Main draw function — draws grid + HTML elements into the canvas
+ * Main draw function — draws grid + connection curves + HTML elements into the canvas
  */
 function draw(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   cam: Camera,
   nodeRefs: Map<string, HTMLDivElement>,
-  allNodes: MindMapNode[],
+  flatNodes: FlatNode[],
+  dashOffset: number,
 ) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
@@ -219,48 +281,107 @@ function draw(
   // ── Draw dot grid ────────────────────────────────────────────
   drawDotGrid(ctx, cam, w, h);
 
+  // ── Draw connection curves between parents and children ──────
+  drawConnections(ctx, cam, w, h, flatNodes, dashOffset);
+
   // ── Draw HTML elements via drawElementImage ───────────────────
-  // Set up camera transform on the canvas CTM
   ctx.save();
   ctx.setTransform(
-    cam.zoom * dpr,    // scaleX
-    0,                 // skewY
-    0,                 // skewX
-    cam.zoom * dpr,    // scaleY
-    (w / 2 - cam.x * cam.zoom) * dpr,  // translateX
-    (h / 2 - cam.y * cam.zoom) * dpr,  // translateY
+    cam.zoom * dpr,
+    0,
+    0,
+    cam.zoom * dpr,
+    (w / 2 - cam.x * cam.zoom) * dpr,
+    (h / 2 - cam.y * cam.zoom) * dpr,
   );
 
   // Draw each node element at its world position
-  for (const node of allNodes) {
-    const el = nodeRefs.get(node.id);
+  for (const flatNode of flatNodes) {
+    const el = nodeRefs.get(flatNode.node.id);
     if (!el) continue;
 
     try {
-      // drawElementImage draws the element using the current CTM
-      // We translate to the node's world position, then draw
       ctx.save();
-      ctx.translate(node.x, node.y);
+      ctx.translate(flatNode.worldX, flatNode.worldY);
 
-      // The API: ctx.drawElementImage(element, dx, dy)
-      // It draws the element's rendered content at (dx, dy) in current coords
       const drawFn = (ctx as any).drawElementImage;
       if (drawFn) {
         const transform = drawFn.call(ctx, el, 0, 0);
-        // Apply the returned CSS transform to sync hit testing
         if (transform) {
           el.style.transform = transform.toString();
         }
       }
 
       ctx.restore();
-    } catch (e) {
+    } catch {
       // drawElementImage may throw if snapshot not yet recorded
-      // (e.g., first frame before paint event)
     }
   }
 
   ctx.restore();
+}
+
+/**
+ * Draw bezier connection curves between parent and child nodes
+ */
+function drawConnections(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  w: number,
+  h: number,
+  flatNodes: FlatNode[],
+  dashOffset: number,
+) {
+  for (const flatNode of flatNodes) {
+    if (!flatNode.parent) continue;
+
+    const parentOpacity = flatNode.parent.childRevealProgress;
+    if (parentOpacity < 0.01) continue;
+
+    const parent = flatNode.parent;
+
+    // Parent center in screen space
+    const parentScreenX = (parent.worldX + parent.node.width / 2 - cam.x) * cam.zoom + w / 2;
+    const parentScreenY = (parent.worldY + parent.node.height / 2 - cam.y) * cam.zoom + h / 2;
+
+    // Child center in screen space
+    const childScreenX = (flatNode.worldX + flatNode.node.width / 2 - cam.x) * cam.zoom + w / 2;
+    const childScreenY = (flatNode.worldY + flatNode.node.height / 2 - cam.y) * cam.zoom + h / 2;
+
+    // Skip if both endpoints are way off screen
+    if (
+      (parentScreenX < -200 && childScreenX < -200) ||
+      (parentScreenX > w + 200 && childScreenX > w + 200) ||
+      (parentScreenY < -200 && childScreenY < -200) ||
+      (parentScreenY > h + 200 && childScreenY > h + 200)
+    ) {
+      continue;
+    }
+
+    // Draw bezier curve
+    const cpOffset = Math.abs(childScreenY - parentScreenY) * 0.4;
+
+    ctx.save();
+    ctx.globalAlpha = parentOpacity * 0.5;
+    ctx.strokeStyle = flatNode.node.accentColor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 4]);
+    ctx.lineDashOffset = dashOffset;
+
+    ctx.beginPath();
+    ctx.moveTo(parentScreenX, parentScreenY);
+    ctx.bezierCurveTo(
+      parentScreenX,
+      parentScreenY + cpOffset,
+      childScreenX,
+      childScreenY - cpOffset,
+      childScreenX,
+      childScreenY,
+    );
+    ctx.stroke();
+
+    ctx.restore();
+  }
 }
 
 /**

@@ -76,3 +76,15 @@ html, body, #root {
 .viewport:active {
   cursor: grabbing;
 }
+
+/* ── Portal character styling ──────────────────────────────────── */
+.portal-char {
+  display: inline;
+  font-weight: 800;
+  transition: opacity 0.1s ease-out, text-shadow 0.2s ease-out;
+}
+
+/* ── Node card reveal state ────────────────────────────────────── */
+.node-card.revealing {
+  border-color: rgba(255, 255, 255, 0.2);
+}
