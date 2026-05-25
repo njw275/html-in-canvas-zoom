@@ -100,11 +100,13 @@ export function InfiniteCanvas({ cameraRef, subscribe, nestScale, levels }: Prop
             {isImage ? (
               <img
                 src={level.imageUrl}
+                draggable={false}
                 style={{
                   width: LEVEL_WIDTH,
                   height: lh,
                   objectFit: 'cover',
                   display: 'block',
+                  pointerEvents: 'none',
                 }}
               />
             ) : (
